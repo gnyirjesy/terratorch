@@ -1,0 +1,48 @@
+# convenxtv2.lsf
+#!/bin/bash
+# Attempt with 2 GPUS
+#BSUB -J convnextv2_inc_ang
+#BSUB -q normal
+# CPUs:
+#BSUB -n 80
+# Memory:
+#BSUB -M 64000
+# GPUs: # on one host
+#BSUB -gpu "num=2:mode=exclusive_process:gmodel=NVIDIAA100_SXM4_80GB"
+#BSUB -R "span[hosts=1]"
+# Walltime
+#BSUB -W 24:00
+# Logs
+#BSUB -o /dccstor/cimf/gabby/object_detection/job_info/convnextv2%J.out
+#BSUB -e /dccstor/cimf/gabby/object_detection/job_info/convnextv2%J.err
+
+## Attempt with 1 GPU
+##BSUB -J convnextv2
+##BSUB -q normal
+##BSUB -M 64G
+##BSUB -n 8
+##BSUB -gpu "num=1:mode=exclusive_process:gmodel=NVIDIAA100_SXM4_80GB"
+##BSUB -W 12:00
+##BSUB -o /dccstor/cimf/gabby/object_detection/job_info/convnextv2%J.out
+##BSUB -e /dccstor/cimf/gabby/object_detection/job_info/convnextv2%J.err
+
+source "/dccstor/cimf/gabby/miniforge3/etc/profile.d/conda.sh" || { echo "conda.sh missing"; exit 1; }
+conda activate lunarfm-terratorch || { echo "conda env not found"; exit 1; }
+
+set -euo pipefail
+
+# Single-node multi-GPU NCCL sanity for clusters without IB
+export NCCL_P2P_DISABLE=0
+export NCCL_IB_DISABLE=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+
+cd /dccstor/cimf/gabby/object_detection
+
+# If the cluster has no public internet and you're using W&B:
+# export WANDB_MODE=offline
+
+# Make sure your YAML has trainer.accelerator=gpu and devices=2
+# terratorch fit --config /dccstor/cimf/gabby/object_detection/terratorch_configs/wac_robbins_timm_convnextv2.yaml
+python /dccstor/cimf/gabby/object_detection/wac_coco_test.py
