@@ -63,6 +63,8 @@ from terratorch.datasets.m_VHR10 import mVHR10
 
 from terratorch.datasets.substation import Substation
 
+from terratorch.datasets.wac_robbins import WACVisRobbins
+
 # Surya datasets
 try:
     from terratorch.datasets.helio import HelioNetCDFDataset
@@ -115,5 +117,6 @@ __all__ = (
     "OpenEarthMapNonGeo",
     "mVHR10",
     "Substation",
-    "HelioNetCDFDataset"
+    "HelioNetCDFDataset",
+    "WACVisRobbins",
 )
