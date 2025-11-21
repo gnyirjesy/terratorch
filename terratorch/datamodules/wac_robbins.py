@@ -219,6 +219,7 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
             self.stats = yaml.safe_load(f)
         
         self.bands = bands
+        self.percentile_normalize = percentile_normalize
 
 
         if apply_norm_in_datamodule:
