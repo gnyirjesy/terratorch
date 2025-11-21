@@ -60,7 +60,7 @@ class WACVisRobbins(NonGeoDataset):
         annotations_path: str,
         split: str = "train", 
         bands: Sequence[str] = BAND_SETS["rgb"],
-        percentile_noramlize: bool = False,
+        percentile_normalize: bool = False,
         transforms: v2.Compose | None = None,
         no_data_replace: float | None = 0,
         boxes_output_tag='boxes',
@@ -109,7 +109,7 @@ class WACVisRobbins(NonGeoDataset):
         split_imgs = splits[self.split]
         self.ids = [int(k) for k in sorted(split_imgs.keys(), key=lambda x: int(x))]
 
-        self.percentile_noramlize = percentile_noramlize
+        self.percentile_normalize = percentile_normalize
         self.boxes_output_tag = boxes_output_tag
         self.labels_output_tag = labels_output_tag
         self.masks_output_tag = masks_output_tag
@@ -152,7 +152,7 @@ class WACVisRobbins(NonGeoDataset):
                 del sample['label']
         
         # # Percentile normalize to deal with data issues:
-        if self.percentile_noramlize:
+        if self.percentile_normalize:
             img = normalize_percentile_tensor(sample['image']) # version 25
             sample['image'] = img
 
