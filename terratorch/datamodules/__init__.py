@@ -52,17 +52,20 @@ from terratorch.datamodules.sen1floods11 import Sen1Floods11NonGeoDataModule
 from terratorch.datamodules.sen4agrinet import Sen4AgriNetDataModule
 from terratorch.datamodules.torchgeo_data_module import TorchGeoDataModule, TorchNonGeoDataModule
 
-try:
-    from terratorch.datamodules.geobench_v2_data_module import (
-        GeoBenchV2ClassificationDataModule,
-        GeoBenchV2ObjectDetectionDataModule,
-        GeoBenchV2SegmentationDataModule,
-    )
+geobench_v2_present = False
 
-    geobench_v2_present = True
-except ImportError:
-    logging.getLogger("terratorch").debug("geobench_v2 not installed")
-    geobench_v2_present = False
+# try:
+#     from terratorch.datamodules.geobench_v2_data_module import (
+#         GeoBenchV2ClassificationDataModule,
+#         GeoBenchV2ObjectDetectionDataModule,
+#         GeoBenchV2SegmentationDataModule,
+#     )
+
+#     geobench_v2_present = True
+# except ImportError:
+#     logging.getLogger("terratorch").debug("geobench_v2 not installed")
+#     geobench_v2_present = False
+
 
 # miscellaneous datamodules
 
@@ -70,6 +73,7 @@ except ImportError:
 from terratorch.datamodules.m_VHR10 import mVHR10DataModule
 from terratorch.datamodules.sen4map import Sen4MapLucasDataModule
 from terratorch.datamodules.substation import SubstationDataModule
+from terratorch.datamodules.wac_robbins import WACVisRobbinsDataModule
 
 try:
     from terratorch.datamodules.helio import HelioNetCDFDataModule
@@ -111,6 +115,7 @@ __all__ = (
     "mVHR10DataModule",
     "SubstationDataModule",
     "HelioNetCDFDataModule",
+    "WACVisRobbinsDataModule"
 )
 
 if wxc_present:
