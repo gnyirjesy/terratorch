@@ -100,7 +100,11 @@ class ObjectDetectionModelFactory(ModelFactory):
         
         if framework == 'faster-rcnn':
 
-            sizes = ((32), (64), (128), (256), (512))
+            if 'sizes' in framework_kwargs:
+                sizes = framework_kwargs.pop('sizes')
+                sizes = tuple(tuple(x) for x in sizes)
+            else: 
+                sizes = ((32), (64), (128), (256), (512))
             sizes = sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(sizes)
             anchor_generator = AnchorGenerator(sizes=sizes, aspect_ratios=aspect_ratios)
@@ -121,8 +125,12 @@ class ObjectDetectionModelFactory(ModelFactory):
             )
             
         elif framework == 'fcos':
-
-            sizes = ((8,), (16,), (32,), (64,), (128,), (256,))
+            
+            if 'sizes' in framework_kwargs:
+                sizes = framework_kwargs.pop('sizes')
+                sizes = tuple(tuple(x) for x in sizes)
+            else:
+                sizes = ((8,), (16,), (32,), (64,), (128,), (256,))
             sizes=sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((1.0,), (1.0,), (1.0,), (1.0,), (1.0,), (1.0,)) * len(sizes)
             anchor_generator = AnchorGenerator(
@@ -141,15 +149,19 @@ class ObjectDetectionModelFactory(ModelFactory):
 
             )
         elif framework == 'retinanet':
-
-            sizes = (
-                (16, 20, 25),
-                (32, 40, 50),
-                (64, 80, 101),
-                (128, 161, 203),
-                (256, 322, 406),
-                (512, 645, 812),
-            )
+            
+            if 'sizes' in framework_kwargs:
+                sizes = framework_kwargs.pop('sizes')
+                sizes = tuple(tuple(x) for x in sizes)
+            else:
+                sizes = (
+                    (16, 20, 25),
+                    (32, 40, 50),
+                    (64, 80, 101),
+                    (128, 161, 203),
+                    (256, 322, 406),
+                    (512, 645, 812),
+                )
             sizes=sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(sizes)
             anchor_generator = AnchorGenerator(sizes, aspect_ratios)
@@ -173,7 +185,11 @@ class ObjectDetectionModelFactory(ModelFactory):
 
         elif framework == 'mask-rcnn':
 
-            sizes = ((32), (64), (128), (256), (512))
+            if 'sizes' in framework_kwargs:
+                sizes = framework_kwargs.pop('sizes')
+                sizes = tuple(tuple(x) for x in sizes)
+            else:
+                sizes = ((32), (64), (128), (256), (512))
             sizes = sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(sizes)
             anchor_generator = AnchorGenerator(sizes=sizes, aspect_ratios=aspect_ratios)
