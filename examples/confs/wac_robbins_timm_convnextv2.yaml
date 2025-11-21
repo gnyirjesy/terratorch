@@ -1,0 +1,121 @@
+# lightning.pytorch==2.1.1
+seed_everything: 0
+trainer:
+  accelerator: gpu
+  strategy: ddp
+  devices: 2
+  num_nodes: 1
+  precision: 16-mixed
+  # Single GPU testing
+  # accelerator: auto
+  # strategy: auto
+  # devices: 1
+  # num_nodes: 1
+  # precision: 16-mixed
+  logger:
+    class_path: TensorBoardLogger
+    init_args:
+      save_dir:  /dccstor/cimf/gabby/object_detection/logs
+      name: timm_convnextv2_base_robbins
+    # class_path: WandbLogger #TensorBoardLogger
+    # init_args:
+    #   save_dir:  /dccstor/cimf/gabby/object_detection/logs
+    #   name: crater_segmentation_timm_convnextv2_base_v2
+    #   project: lunarfm
+    #   mode: offline
+    #   offline: true
+    #   entity: "nasa-impact"
+  callbacks:
+    - class_path: RichProgressBar
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: ModelCheckpoint
+      init_args:
+        mode: max
+        monitor: val_segm_map  # if mask-rcnn; else val_map
+        filename: best-{epoch:02d}-{val_segm_map:.4f}
+    - class_path: EarlyStopping
+      init_args:
+        monitor: val_segm_map  # if mask-rcnn; else val_map
+        patience: 50
+        mode: max
+  default_root_dir:  /dccstor/cimf/gabby/object_detection/logs/checkpoints
+
+  enable_checkpointing: true
+  max_epochs: 300
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 10
+  
+  
+data:   
+  class_path: WACVisRobbinsDataModule
+  init_args:
+    wac_data_root: /dccstor/cimf/gabby/lunar/WAC_ELV_SLP_SIN_COS_vis
+    # coco_data_root: /dccstor/cimf/gabby/object_detection/robbins_coco_data
+    splits_path: /dccstor/cimf/gabby/object_detection/robbins_coco_data/split_lookup.json # /dccstor/cimf/gabby/object_detection/robbins_coco_data/small_split_lookup.json
+    annotations_path: /dccstor/cimf/gabby/object_detection/robbins_coco_data/annotations_subset_xywh_v4.json
+    stats_path: /dccstor/cimf/gabby/object_detection/robbins_coco_data/train_stats_downstream.yaml
+    num_workers: 16 # 16 # set to 0 for debugging
+    batch_size: 8
+    apply_norm_in_datamodule: false
+    percentile_normalize: true # Make sure apply_norm_in_datamodule is false when using this
+
+model:
+  class_path: terratorch.tasks.ObjectDetectionTask
+  init_args:
+    model_factory: ObjectDetectionModelFactory
+    model_args:
+      framework: mask-rcnn # object detection framework to be used between "faster-rcnn", "fcos", "retinanet" for object detection and "mask-rcnn" for instance segmentation.
+      backbone: timm_convnextv2_base #resnet50 #timm_convnextv2_base #in22k_1k
+
+      #### Framework specific to get more features
+      framework_min_size: 300
+      framework_max_size: 300 
+      # Set this so that normalization is not applied again - actually have this already addressed in datamodule
+      # framework_mean: [0.0, 0.0, 0.0]
+      # framework_std: [1.0, 1.0, 1.0]
+      # framework_sizes: [[8], [16], [32], [64], [128]]
+      # framework_rpn_pre_nms_top_n_train: 4000
+      # framework_rpn_post_nms_top_n_train: 2000
+      # framework_rpn_pre_nms_top_n_test: 2000
+      # framework_rpn_post_nms_top_n_test: 1000
+      # framework_box_score_thresh: 0.05
+      # framework_box_nms_thresh: 0.5
+      # # IOU thresholds for tiny craters
+      # framework_rpn_fg_iou_thresh: 0.5
+      # framework_rpn_bg_iou_thresh: 0.2
+      # # ROI sampling
+      # # framework_rpn_batch_size_per_image=512,
+      # framework_box_batch_size_per_image: 256
+      # framework_box_positive_fraction: 0.2
+      # framework_box_score_thresh: 0.05
+      # framework_box_nms_thresh: 0.5
+      # framework_detections_per_img: 300
+
+      ##### Backbone specific
+      # backbone_pretrained is false so as not to download from the hub. Will later load the checkpoint in timm.create_model
+      # backbone_pretrained: true
+      # For timm need to specify backbone_checkpoint_path - should work with the .pt file
+      backbone_pretrained: false
+      backbone_checkpoint_path: /dccstor/cimf/gabby/object_detection/pretrained_models/convnextv2_base_tt_features_only.pt #/dccstor/cimf/gabby/object_detection/pretrained_models/models--timm--convnextv2_base.fcmae_ft_in22k_in1k/snapshots/9e250ed8f88b436472d2b24af26f82a8aa8c719d/pytorch_model.bin
+      # backbone_out_indices: [1, 2, 3] # Only have 3 feature levels in this mask-rcnn
+      num_classes: 2
+      in_channels: 3
+      # decoder: ""
+      necks:
+        - name: FeaturePyramidNetworkNeck
+    freeze_backbone: false
+    freeze_decoder: false
+    class_names: [background, crater]
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-4
+    weight_decay: 0.05 #change to 0 for testing (originally 0.05)
+
+lr_scheduler:
+  class_path: CosineAnnealingLR
+  init_args:
+    T_max: 100
