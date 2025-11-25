@@ -78,7 +78,37 @@ def apply_transforms(sample, transforms, boxes_tag='boxes', labels_tag='labels',
         labels=labels
     )
 
-    boxes = np.array(transformed["bboxes"], dtype=np.float32)
+    # If crop causes bbox/mask misalignment then skip the sample and return and empty target
+    if len(transformed["masks"]) != len(transformed["bboxes"]):
+        return {
+            "image": torch.from_numpy(transformed["image"]).float().permute(2,0,1),
+            boxes_tag: torch.zeros((0,4), dtype=torch.float32),
+            labels_tag: torch.zeros((0,), dtype=torch.int64),
+            masks_tag: [],
+        }
+    # ----- HANDLE EMPTY CASE (Albumentations dropped everything) -----
+    if len(transformed["masks"]) == 0:
+        img = transformed["image"]
+        if isinstance(img, np.ndarray):
+            img = torch.from_numpy(img).float().permute(2,0,1)
+
+        return {
+            "image": img,
+            boxes_tag: torch.zeros((0,4), dtype=torch.float32),
+            labels_tag: torch.zeros((0,), dtype=torch.int64),
+            masks_tag: [],
+        }  
+    
+    # Normal case 
+    img = transformed["image"]
+    if isinstance(img, np.ndarray):
+        img = torch.from_numpy(img)
+    # Ensure CHW
+    if img.ndim == 3 and img.shape[0] != sample["image"].shape[0]:
+        img = img.permute(2,0,1)
+    image_t = img.float()
+
+    boxes = np.array(transformed["bboxes"], dtype=np.float32).reshape(-1,4)
     labels = np.array(transformed["labels"], dtype=np.int64)
     masks = transformed["masks"]
 
@@ -91,11 +121,6 @@ def apply_transforms(sample, transforms, boxes_tag='boxes', labels_tag='labels',
             keep.append(False)
         else:
             keep.append(True)
-
-    img = transformed['image']
-    if isinstance(img, np.ndarray):
-        img = torch.from_numpy(img)
-    image_t = img.float()
 
     boxes = boxes[keep]
     labels = labels[keep]
