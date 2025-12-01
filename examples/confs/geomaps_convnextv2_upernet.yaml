@@ -1,0 +1,125 @@
+# lightning.pytorch==2.1.1
+seed_everything: 0
+trainer:
+  accelerator: gpu
+  strategy: ddp
+  devices: 2
+  num_nodes: 1
+  precision: 16-mixed
+  # Single GPU testing
+  # accelerator: auto
+  # strategy: auto
+  # devices: auto
+  # num_nodes: 1
+  # precision: 16-mixed
+  logger:
+    class_path: TensorBoardLogger
+    init_args:
+      save_dir:  /dccstor/cimf/gabby/USGS_map_segmentation/checkpoints
+      name: geomaps_convnextv2_base_upernet
+    # class_path: WandbLogger #TensorBoardLogger
+    # init_args:
+    #   save_dir:  /dccstor/cimf/gabby/USGS_map_segmentation/checkpoints
+    #   name: crater_segmentation_timm_convnextv2_base_v2
+    #   project: lunarfm
+    #   mode: offline
+    #   offline: true
+    #   entity: "nasa-impact"
+  callbacks:
+    - class_path: RichProgressBar
+    - class_path: LearningRateMonitor
+      init_args:
+        logging_interval: epoch
+    - class_path: ModelCheckpoint
+      init_args:
+        mode: max
+        monitor: val/mIoU
+        filename: best-{epoch:02d}-{val_mIoU:.4f}
+    # - class_path: EarlyStopping
+    #   init_args:
+    #     monitor: val_segm_map  # if mask-rcnn; else val_map
+    #     patience: 50
+    #     mode: max
+  default_root_dir:  /dccstor/cimf/gabby/USGS_map_segmentation/checkpoints
+
+  enable_checkpointing: true
+  max_epochs: 100
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 10
+  
+  
+data:   
+  class_path: terratorch.datamodules.wac_geomaps.WACVisGeomapsDataModule
+  init_args:
+    wac_data_root: /dccstor/cimf/gabby/lunar/downstream_task_data
+    labels_root: /dccstor/cimf/gabby/lunar/downstream_task_data_geomap #/dccstor/cimf/gabby/lunar/downstream_geomaps_labels_100m
+    splits_path: /dccstor/cimf/gabby/lunar/Lunar_LowRes_MLDataset_downstream_splits_v2.parquet
+    stats_path: /dccstor/cimf/gabby/object_detection/robbins_coco_data/train_stats_downstream_v3_inc_ang_50_75.yaml
+    num_classes: 15
+    num_workers: 16
+    batch_size: 8
+    apply_norm_in_datamodule: false
+    percentile_normalize: true # Make sure apply_norm_in_datamodule is false when using this
+    train_transform:
+      - class_path: albumentations.RandomCrop
+        init_args:
+          height: 224
+          width: 224
+      - class_path: albumentations.HorizontalFlip
+        init_args:
+          p: 0.5
+      - class_path: ToTensorV2
+    val_transform:
+      - class_path: albumentations.RandomCrop
+        init_args:
+            height: 224
+            width: 224
+      - class_path: ToTensorV2
+    test_transform:
+      - class_path: albumentations.CenterCrop
+        init_args:
+            height: 224
+            width: 224
+      - class_path: ToTensorV2
+
+model:
+  class_path: terratorch.tasks.SemanticSegmentationTask
+  init_args:
+    model_factory: EncoderDecoderFactory
+    model_args:
+      ##### Backbone specific
+      backbone: timm_convnextv2_base #resnet50 #timm_convnextv2_base #in22k_1k
+      # backbone_pretrained is false so as not to download from the hub. Will later load the checkpoint in timm.create_model
+      backbone_pretrained: true
+      # For timm need to specify backbone_checkpoint_path - should work with the .pt file
+      # backbone_pretrained: false
+      # backbone_checkpoint_path: /dccstor/cimf/gabby/object_detection/pretrained_models/convnextv2_base_tt_features_only.pt #/dccstor/cimf/gabby/object_detection/pretrained_models/models--timm--convnextv2_base.fcmae_ft_in22k_in1k/snapshots/9e250ed8f88b436472d2b24af26f82a8aa8c719d/pytorch_model.bin
+      num_classes: 15
+      # in_channels: 3
+      decoder: UperNetDecoder
+      decoder_channels: 256
+      head_dropout: 0.1
+      head_channel_list:
+        - 256
+      necks:
+        - name: DictToListNeck
+          neck:
+            name: FeaturePyramidNetworkNeck
+            out_channel: 256
+            # channel_list: [128, 256, 512, 1024]  # auto injected, ConvNeXtV2 stages https://huggingface.co/timm/convnextv2_base.fcmae_ft_in22k_in1k
+    freeze_backbone: false
+    freeze_decoder: false
+    ignore_index: -1
+    # class_names = ["0.0", "1.0", etc.]
+    # class_names: ["Eratosthenian_crater", "Imbrian_crater", "Imbrian_basin", "Imbrian_mare", "Nectarian_basin", "Nectarian_crater", "Imbrian_terra", "Nectarian_terra", "Pre_Nectarian_crater", "Pre_Nectarian_terra", "Copernican_crater", "Imbrian_Nectarian_terra", "Pre_Nectarian_basin", "Eratosthenian_Imbrian_mare", "Eratosthenian_Imbrian_terra"]
+
+optimizer:
+  class_path: torch.optim.AdamW
+  init_args:
+    lr: 1e-4
+    weight_decay: 0.05 #change to 0 for testing (originally 0.05)
+
+lr_scheduler:
+  class_path: ReduceLROnPlateau
+  init_args:
+    monitor: val/loss
