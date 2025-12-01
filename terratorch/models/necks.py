@@ -330,6 +330,43 @@ class FeaturePyramidNetworkNeck(Neck):
         channel_list = len(channel_list) * [self.out_channel]
         return channel_list
 
+@TERRATORCH_NECK_REGISTRY.register
+class DictToListNeck(Neck):
+    """
+    Wraps another neck that outputs an OrderedDict and converts the output to a list.
+
+    Use this to make FeaturePyramidNetworkNeck compatible with decoders (e.g., UPerNet)
+    that require a List[Tensor] instead of an OrderedDict.
+    """
+    def __init__(self, channel_list: list[int], neck: dict):
+        """
+        Args:
+            neck (dict): a nested neck config, e.g.
+                neck: { name: FeaturePyramidNetworkNeck, out_channel: 256 }
+        """
+        super().__init__(channel_list)
+
+        # Build the inner neck
+        self.inner_neck = NECK_REGISTRY.build(
+            neck["name"],
+            channel_list,
+            **{k: v for k, v in neck.items() if k != "name"}
+        )
+
+        # After building inner neck, update channel_list according to it
+        self.channel_list = self.inner_neck.process_channel_list(channel_list)
+
+    def forward(self, features: list[torch.Tensor], **kwargs) -> list[torch.Tensor]:
+        out = self.inner_neck(features, **kwargs)
+
+        # If the inner neck outputs a dict, convert it
+        if isinstance(out, OrderedDict):
+            return list(out.values())
+        return out
+
+    def process_channel_list(self, channel_list: list[int]) -> list[int]:
+        # Delegates to inner neck
+        return self.inner_neck.process_channel_list(channel_list)
 
 def build_neck_list(ops: list[dict], channel_list: list[int]) -> tuple[list[Neck], list[int]]:
     neck_list = []
