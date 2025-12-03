@@ -23,6 +23,13 @@ import torch
 import pdb
 from .utils import _get_backbone, TerratorchGeneralizedRCNNTransform
 
+from torchvision.models.detection import MaskRCNN
+from collections import OrderedDict
+from typing import Optional
+import warnings
+from torch import nn
+from torch import Tensor
+
 SUPPORTED_TASKS = ['object_detection']
 
 
@@ -37,6 +44,119 @@ def _check_all_args_used(kwargs):
     if kwargs:
         msg = f"arguments {kwargs} were passed but not used."
         raise ValueError(msg)
+
+class ImageList:
+    """
+    Structure that holds a list of images (of possibly
+    varying sizes) as a single tensor.
+    This works by padding the images to the same size,
+    and storing in a field the original sizes of each image
+
+    Args:
+        tensors (tensor): Tensor containing images.
+        image_sizes (list[tuple[int, int]]): List of Tuples each containing size of images.
+    """
+
+    def __init__(self, tensors: Tensor, image_sizes: list[tuple[int, int]]) -> None:
+        self.tensors = tensors
+        self.image_sizes = image_sizes
+
+    def to(self, device: torch.device) -> "ImageList":
+        cast_tensor = self.tensors.to(device)
+        return ImageList(cast_tensor, self.image_sizes)
+
+class multimodalMaskRCNN(MaskRCNN):
+
+    def forward(
+        self,
+        images: dict,
+        targets: Optional[list[dict[str, torch.Tensor]]] = None,
+    ) -> tuple[dict[str, torch.Tensor], list[dict[str, torch.Tensor]]]:
+        """
+        Args:
+            images (list[Tensor]): images to be processed
+            targets (list[dict[str, tensor]]): ground-truth boxes present in the image (optional)
+
+        Returns:
+            result (list[BoxList] or dict[Tensor]): the output from the model.
+                During training, it returns a dict[Tensor] which contains the losses.
+                During testing, it returns list[BoxList] contains additional fields
+                like `scores`, `labels` and `mask` (for Mask R-CNN models).
+
+        """
+        # print('kwargs',self.framework_kwargs)
+        if self.training:
+            if targets is None:
+                torch._assert(False, "targets should not be none when in training mode")
+            else:
+                for target in targets:
+                    boxes = target["boxes"]
+                    if isinstance(boxes, torch.Tensor):
+                        torch._assert(
+                            len(boxes.shape) == 2 and boxes.shape[-1] == 4,
+                            f"Expected target boxes to be a tensor of shape [N, 4], got {boxes.shape}.",
+                        )
+                    else:
+                        torch._assert(
+                            False,
+                            f"Expected target boxes to be of type Tensor, got {type(boxes)}.",
+                        )
+
+        original_image_sizes: list[tuple[int, int]] = []
+
+
+        vis_modality = 'vis'
+        # print('self.image_modalitlksnmcxlknlony',vis_modality)
+
+        for img in range(images[vis_modality].shape[0]):
+            # val = _get_size(imgx)
+            val = images[vis_modality].shape[-2:]
+            torch._assert(
+                len(val) == 2,
+                f"expecting the last two dimensions of the Tensor to be H and W instead got {images[vis_modality].shape[-2:]}",
+            )
+            original_image_sizes.append((val[0], val[1]))
+
+        # images, targets = self.transform(images['vis'], targets)
+
+        # Check for degenerate boxes
+        # TODO: Move this to a function
+        if targets is not None:
+            for target_idx, target in enumerate(targets):
+                boxes = target["boxes"]
+                degenerate_boxes = boxes[:, 2:] <= boxes[:, :2]
+                if degenerate_boxes.any():
+                    # print the first degenerate box
+                    bb_idx = torch.where(degenerate_boxes.any(dim=1))[0][0]
+                    degen_bb: list[float] = boxes[bb_idx].tolist()
+                    torch._assert(
+                        False,
+                        "All bounding boxes should have positive height and width."
+                        f" Found invalid box {degen_bb} for target at index {target_idx}.",
+                    )
+        features = self.backbone(images)
+
+        if isinstance(features, torch.Tensor):
+            features = OrderedDict([("0", features)])
+
+        torpn = ImageList(images[vis_modality][:,:3,:,:],[[val[0], val[1]]] * images[vis_modality].shape[0])
+        proposals, proposal_losses = self.rpn(torpn, features, targets)
+        detections, detector_losses = self.roi_heads(features, proposals, torpn.image_sizes, targets)
+        detections = self.transform.postprocess(
+            detections, torpn.image_sizes, original_image_sizes
+        )  # type: ignore[operator]
+
+        losses = {}
+        losses.update(detector_losses)
+        losses.update(proposal_losses)
+
+        if torch.jit.is_scripting():
+            if not self._has_warned:
+                warnings.warn("RCNN always returns a (Losses, Detections) tuple in scripting")
+                self._has_warned = True
+            return losses, detections
+        else:
+            return self.eager_outputs(losses, detections)
 
 
 @MODEL_FACTORY_REGISTRY.register
@@ -76,6 +196,8 @@ class ObjectDetectionModelFactory(ModelFactory):
             raise NotImplementedError(msg)
         backbone_kwargs, kwargs = extract_prefix_keys(kwargs, "backbone_")
         framework_kwargs, kwargs = extract_prefix_keys(kwargs, "framework_")
+        # vis_modality_kwargs, kwargs = extract_prefix_keys(kwargs, "vis_modality_")
+
         
         backbone = _get_backbone(backbone, **backbone_kwargs)
         if 'in_channels' in kwargs.keys():
@@ -100,11 +222,7 @@ class ObjectDetectionModelFactory(ModelFactory):
         
         if framework == 'faster-rcnn':
 
-            if 'sizes' in framework_kwargs:
-                sizes = framework_kwargs.pop('sizes')
-                sizes = tuple(tuple(x) for x in sizes)
-            else: 
-                sizes = ((32), (64), (128), (256), (512))
+            sizes = ((32), (64), (128), (256), (512))
             sizes = sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(sizes)
             anchor_generator = AnchorGenerator(sizes=sizes, aspect_ratios=aspect_ratios)
@@ -125,12 +243,8 @@ class ObjectDetectionModelFactory(ModelFactory):
             )
             
         elif framework == 'fcos':
-            
-            if 'sizes' in framework_kwargs:
-                sizes = framework_kwargs.pop('sizes')
-                sizes = tuple(tuple(x) for x in sizes)
-            else:
-                sizes = ((8,), (16,), (32,), (64,), (128,), (256,))
+
+            sizes = ((8,), (16,), (32,), (64,), (128,), (256,))
             sizes=sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((1.0,), (1.0,), (1.0,), (1.0,), (1.0,), (1.0,)) * len(sizes)
             anchor_generator = AnchorGenerator(
@@ -149,19 +263,15 @@ class ObjectDetectionModelFactory(ModelFactory):
 
             )
         elif framework == 'retinanet':
-            
-            if 'sizes' in framework_kwargs:
-                sizes = framework_kwargs.pop('sizes')
-                sizes = tuple(tuple(x) for x in sizes)
-            else:
-                sizes = (
-                    (16, 20, 25),
-                    (32, 40, 50),
-                    (64, 80, 101),
-                    (128, 161, 203),
-                    (256, 322, 406),
-                    (512, 645, 812),
-                )
+
+            sizes = (
+                (16, 20, 25),
+                (32, 40, 50),
+                (64, 80, 101),
+                (128, 161, 203),
+                (256, 322, 406),
+                (512, 645, 812),
+            )
             sizes=sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(sizes)
             anchor_generator = AnchorGenerator(sizes, aspect_ratios)
@@ -185,11 +295,7 @@ class ObjectDetectionModelFactory(ModelFactory):
 
         elif framework == 'mask-rcnn':
 
-            if 'sizes' in framework_kwargs:
-                sizes = framework_kwargs.pop('sizes')
-                sizes = tuple(tuple(x) for x in sizes)
-            else:
-                sizes = ((32), (64), (128), (256), (512))
+            sizes = ((32), (64), (128), (256), (512))
             sizes = sizes[:len(combined_backbone.channel_list)]
             aspect_ratios = ((0.5, 1.0, 2.0),) * len(sizes)
             anchor_generator = AnchorGenerator(sizes=sizes, aspect_ratios=aspect_ratios)
@@ -217,7 +323,42 @@ class ObjectDetectionModelFactory(ModelFactory):
                 image_std=np.repeat(1, in_channels),
                 **framework_kwargs
             )
+        elif framework == 'mask-rcnn-mm':
 
+            # print('combined_backbone.out_channels',combined_backbone.out_channels,combined_backbone.channel_list)
+
+            if 'sizes' in framework_kwargs:
+                sizes = framework_kwargs.pop('sizes')
+                sizes = tuple(tuple(x) for x in sizes)
+            else:
+                sizes = ((32), (64), (128), (256), (512))
+            sizes = sizes[:len(combined_backbone.channel_list)]
+            aspect_ratios = ((0.5, 1.0, 2.0),) * len(sizes)
+            anchor_generator = AnchorGenerator(sizes=sizes, aspect_ratios=aspect_ratios)
+
+            rpn_head = torchvision.models.detection.faster_rcnn.RPNHead(combined_backbone.out_channels, anchor_generator.num_anchors_per_location()[0], conv_depth=2)
+            box_head = torchvision.models.detection.faster_rcnn.FastRCNNConvFCHead(
+                (combined_backbone.out_channels, 7, 7), [256, 256, 256, 256], [1024], norm_layer=nn.BatchNorm2d
+            )
+            mask_head = torchvision.models.detection.mask_rcnn.MaskRCNNHeads(combined_backbone.out_channels, [256, 256, 256, 256], 1, norm_layer=nn.BatchNorm2d)
+            roi_pooler = MultiScaleRoIAlign(
+                featmap_names=['feat0', 'feat1', 'feat2', 'feat3'], output_size=7, sampling_ratio=2
+            )
+
+            model = multimodalMaskRCNN(
+                combined_backbone,
+                num_classes=num_classes,
+                rpn_anchor_generator=anchor_generator,
+                rpn_head=rpn_head,
+                box_head=box_head,
+                box_roi_pool=roi_pooler,
+                mask_roi_pool=roi_pooler,
+                mask_head=mask_head,
+                _skip_resize=True,
+                image_mean=np.repeat(0, in_channels),
+                image_std=np.repeat(1, in_channels),
+                **framework_kwargs
+            )
         else:
             raise ValueError(f"Framework type '{framework}' is not valid.")
         # some decoders already include a head

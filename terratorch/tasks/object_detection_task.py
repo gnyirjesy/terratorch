@@ -98,7 +98,9 @@ class ObjectDetectionTask(BaseTask):
         self.model_factory = MODEL_FACTORY_REGISTRY.build(model_factory)
         self.framework = model_args['framework']
         self.monitor = 'val_segm_map' if self.framework == 'mask-rcnn' else self.monitor
-        
+
+        self.vis_modality = model_args['framework_vis_modality']
+  
         super().__init__()
         self.train_loss_handler = LossHandler(self.train_metrics.prefix)
         self.test_loss_handler = LossHandler(self.test_metrics.prefix)
@@ -121,7 +123,6 @@ class ObjectDetectionTask(BaseTask):
         """
         It instantiates the model and freezes/unfreezes the backbone and decoder networks.
         """
-
         self.model: Model = self.model_factory.build_model(
             "object_detection", **self.hparams["model_args"]
         )
@@ -130,11 +131,13 @@ class ObjectDetectionTask(BaseTask):
         if self.hparams["freeze_decoder"]:
             self.model.freeze_decoder()
 
+        # print('self.model',self.model)
+            
     def configure_metrics(self) -> None:
         """
         Configure metrics for the task.
         """
-        if self.framework == 'mask-rcnn':
+        if (self.framework == 'mask-rcnn') | (self.framework == 'mask-rcnn-mm'):
             metrics = MetricCollection({
                 "mAP": MeanAveragePrecision(
                     iou_type=('bbox', 'segm'),
@@ -276,7 +279,11 @@ class ObjectDetectionTask(BaseTask):
         """
 
         x = batch['image']
-        batch_size = get_batch_size(x)
+        other_keys = batch.keys() - {"image", "mask", "filename","label"}
+        rest = {k: batch[k] for k in other_keys}
+        # model_output: ModelOutput = self(x, **rest)
+
+        batch_size = get_batch_size(self(x, **rest))
         batch = self.apply_ignore_index(batch, self.ignore_index)
         y = self.reformat_batch(batch, batch_size)
         loss_dict = self(x, y)
@@ -298,18 +305,19 @@ class ObjectDetectionTask(BaseTask):
             batch_idx: Integer displaying index of this batch.
             dataloader_idx: Index of the current dataloader.
         """
-        
         x = batch['image']
         batch_size = get_batch_size(x)
         batch = self.apply_ignore_index(batch, self.ignore_index)
         y = self.reformat_batch(batch, batch_size)
+
         y_hat = self(x)
+        
         if isinstance(y_hat, dict) is False:
             y_hat = y_hat.output
     
         y_hat = self.apply_nms_batch(y_hat, batch_size)
 
-        if self.framework == 'mask-rcnn':
+        if (self.framework == 'mask-rcnn') | (self.framework == 'mask-rcnn-mm'):
 
             for i in range(len(y_hat)):
                 if y_hat[i]['masks'].shape[0] > 0:
@@ -337,7 +345,7 @@ class ObjectDetectionTask(BaseTask):
                 batch['boxes'] = batch.pop(self.boxes_field)
             if 'labels' not in batch.keys():
                 batch['labels'] = batch.pop(self.labels_field)
-            if self.framework == 'mask-rcnn':
+            if (self.framework == 'mask-rcnn') | (self.framework == 'mask-rcnn-mm'):
                 if 'masks' not in batch.keys():
                     batch['masks'] = batch.pop(self.masks_field)
 
@@ -348,11 +356,21 @@ class ObjectDetectionTask(BaseTask):
 
             if "masks" in y_hat[0].keys():
                 batch['prediction_masks'] = [b['masks'].cpu() for b in y_hat]
-                if self.framework == 'mask-rcnn':
+                if (self.framework == 'mask-rcnn') | (self.framework == 'mask-rcnn-mm'):
                     batch['prediction_masks'] = [b.unsqueeze(1) for b in batch['prediction_masks']]
 
-            batch['image'] = batch['image'].cpu()
+            
+            batch['image'][self.vis_modality] = batch['image'][self.vis_modality].cpu()
+
+
+            if isinstance(batch["image"], dict):
+                rgb_modality = getattr(self.trainer.datamodule, "rgb_modality", None) or list(batch["image"].keys())[0]
+                batch["image"] = batch["image"][rgb_modality]
+
+            for key in ["image"]:
+                batch[key] = batch[key].cpu()
             sample = unbind_samples(batch)[0]
+
             fig: Figure | None = None
             try:
                 if hasattr(self.trainer.datamodule, 'val_dataset'):
@@ -399,7 +417,7 @@ class ObjectDetectionTask(BaseTask):
 
         y_hat = self.apply_nms_batch(y_hat, batch_size)
 
-        if self.framework == 'mask-rcnn':
+        if (self.framework == 'mask-rcnn') | (self.framework == 'mask-rcnn-mm'):
 
             for i in range(len(y_hat)):
                 if y_hat[i]['masks'].shape[0] > 0:
