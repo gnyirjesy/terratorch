@@ -13,6 +13,59 @@ import torch
 import numpy as np
 from terratorch.datamodules.utils import wrap_in_compose_is_list
 import pdb
+from typing import Dict, Optional
+
+GEOLABEL_UNIT_MAPPING = {
+        1: 10,
+        2: 10,
+        3: 10,
+        4: 14,
+        5: 0,
+        6: 0,
+        7: 13,
+        8: 0,
+        9: 11,
+        10: 11,
+        11: 2,
+        12: 2,
+        13: 1,
+        14: 1,
+        15: 1,
+        16: 1,
+        17: 1,
+        18: 6,
+        19: 6,
+        20: 2,
+        21: 2,
+        22: 1,
+        23: 2,
+        24: 3,
+        25: 3,
+        26: 3,
+        27: 2,
+        28: 2,
+        29: 2,
+        30: 2,
+        31: 2,
+        32: 2,
+        33: 6,
+        34: 1,
+        35: 6,
+        36: 6,
+        37: 4,
+        38: 4,
+        39: 4,
+        40: 4,
+        41: 5,
+        42: 4,
+        43: 7,
+        44: 7,
+        45: 7,
+        46: 12,
+        47: 12,
+        48: 8,
+        49: 9,
+    }
 
 # def apply_transforms(sample, transforms):
 #     # Change shape for albumentations
@@ -63,6 +116,29 @@ class Normalize(Callable):
             raise Exception(msg)
         batch["image"] = (image - means) / stds
         return batch
+    
+class SigNumLog(Callable):
+    def __init__(self, mins, maxs, sl_scale_factor: float = 1.0):
+        super().__init__()
+        self.mins = mins
+        self.maxs = maxs
+        self.sl_scale_factor = sl_scale_factor
+
+    def __call__(self, batch):
+        # batch['image']=torch.stack(tuple(batch["image"]))
+        image = batch["image"]
+        if len(image.shape) == 5:
+            mins = torch.tensor(self.mins, device=image.device).view(1, -1, 1, 1, 1)
+            maxs = torch.tensor(self.maxs, device=image.device).view(1, -1, 1, 1, 1)
+        elif len(image.shape) == 4:
+            mins = torch.tensor(self.mins, device=image.device).view(1, -1, 1, 1)
+            maxs = torch.tensor(self.maxs, device=image.device).view(1, -1, 1, 1)
+        else:
+            msg = f"Expected batch to have 5 or 4 dimensions, but got {len(image.shape)}"
+            raise Exception(msg)
+        y = (image - mins) / (maxs - mins)
+        batch["image"] = torch.sign(y)*torch.log1p(torch.abs(y*self.sl_scale_factor))
+        return batch
 
 class WACVisGeomapsDataModule(NonGeoDataModule):
 
@@ -89,6 +165,7 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
         # image_size=300,
         apply_norm_in_datamodule=True, # objectdetection tasks assume normalization in datamodule
         percentile_normalize = False, # Normalize in dataset percentile based
+        geolabel_unit_mapping: Optional[Dict[int, int]] = None,
         **kwargs):
 
         super().__init__(WACVisGeomaps,
@@ -114,7 +191,7 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
         self.no_label_replace = no_label_replace
         self.batch_size = batch_size
         self.num_workers = num_workers
-
+        
         if apply_norm_in_datamodule:
             means = tuple(self.stats[b]['mean'] for b in self.bands)
             stds  = tuple(self.stats[b]['std']  for b in self.bands)
@@ -125,6 +202,14 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
             self.aug = Normalize((0, 0, 0), (1, 1, 1), max_pixel_value=1)
 
         self.percentile_normalize = percentile_normalize
+
+        if geolabel_unit_mapping:
+            self.geolabel_unit_mapping = geolabel_unit_mapping
+        else:
+            self.geolabel_unit_mapping = GEOLABEL_UNIT_MAPPING
+        
+        # Debugging
+        self._printed_once = False
 
     def setup(self, stage: str) -> None:
 
@@ -139,7 +224,8 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
                 percentile_normalize = self.percentile_normalize,
                 transforms=self.train_transform,
                 no_data_replace=self.no_data_replace,
-                no_label_replace=self.no_label_replace
+                no_label_replace=self.no_label_replace,
+                geolabel_unit_mapping=self.geolabel_unit_mapping
             )            
         if stage in ["fit", "validate"]:
             self.val_dataset = WACVisGeomaps(
@@ -152,7 +238,8 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
                 percentile_normalize = self.percentile_normalize,
                 transforms=self.val_transform,
                 no_data_replace=self.no_data_replace,
-                no_label_replace=self.no_label_replace
+                no_label_replace=self.no_label_replace,
+                geolabel_unit_mapping=self.geolabel_unit_mapping
             )    
         if stage in ["test"]:
             self.test_dataset = WACVisGeomaps(
@@ -165,9 +252,69 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
                 percentile_normalize = self.percentile_normalize,
                 transforms=self.test_transform,
                 no_data_replace=self.no_data_replace,
-                no_label_replace=self.no_label_replace
+                no_label_replace=self.no_label_replace,
+                geolabel_unit_mapping=self.geolabel_unit_mapping
             )  
 
+
+
+    def on_after_batch_transfer(
+        self, batch: dict[str, Tensor], dataloader_idx: int
+    ) -> dict[str, Tensor]:
+        """Apply batch augmentations to the batch after it is transferred to the device.
+
+        Args:
+            batch: A batch of data that needs to be altered or augmented.
+            dataloader_idx: The index of the dataloader to which the batch belongs.
+
+        Returns:
+            A batch of data.
+        """
+
+        if self.trainer:
+            if self.trainer.training:
+                split = 'train'
+            elif self.trainer.validating or self.trainer.sanity_checking:
+                split = 'val'
+            elif self.trainer.testing:
+                split = 'test'
+            elif self.trainer.predicting:
+                split = 'predict'
+
+            aug = self._valid_attribute(f'{split}_aug', 'aug')
+            # -------------------------------
+            # PRINT BEFORE AUGMENTATION
+            # -------------------------------
+            if not self._printed_once and "image" in batch:
+                x = batch["image"]
+                print(
+                    f"[{split}] BEFORE AUG:",
+                    f"min={x.min().item():.4f}",
+                    f"max={x.max().item():.4f}",
+                    f"mean={x.mean().item():.4f}",
+                    f"std={x.std().item():.4f}",
+                )
+
+            # -------------------------------
+            # RUN ORIGINAL TORCHGEO AUG
+            # -------------------------------
+            batch = aug(batch)
+
+            # -------------------------------
+            # PRINT AFTER AUGMENTATION
+            # -------------------------------
+            if not self._printed_once and "image" in batch:
+                x = batch["image"]
+                print(
+                    f"[{split}] AFTER  AUG:",
+                    f"min={x.min().item():.4f}",
+                    f"max={x.max().item():.4f}",
+                    f"mean={x.mean().item():.4f}",
+                    f"std={x.std().item():.4f}",
+                )
+
+        return batch
+    
     def _dataloader_factory(self, split: str) -> DataLoader[dict[str, Tensor]]:
         """Implement one or more PyTorch DataLoaders.
 
@@ -189,5 +336,6 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
             batch_size=batch_size,
             shuffle=split == "train",
             num_workers=self.num_workers,
-            collate_fn=self.collate_fn
+            collate_fn=self.collate_fn,
+            drop_last=True
         )

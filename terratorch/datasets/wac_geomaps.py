@@ -14,6 +14,8 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.patches import Rectangle
 
+from typing import Dict, Optional
+
 # def normalize_percentile_tensor(img):
 #     # Output is 0-1 range tensor
 #     x = img.permute(1,2,0).cpu().numpy()
@@ -70,6 +72,9 @@ GEOLABEL_UNIT_MAPPING = {
         48: 8,
         49: 9,
     }
+
+# Just terrain
+# GEOLABEL_UNIT_MAPPING = {1: 0, 2: 0, 3: 0, 4: 3, 5: 0, 6: 0, 7: 2, 8: 0, 9: 3, 10: 3, 11: 1, 12: 1, 13: 0, 14: 0, 15: 0, 16: 0, 17: 0, 18: 3, 19: 3, 20: 1, 21: 1, 22: 0, 23: 1, 24: 2, 25: 2, 26: 2, 27: 1, 28: 1, 29: 1, 30: 1, 31: 1, 32: 1, 33: 3, 34: 0, 35: 3, 36: 3, 37: 1, 38: 1, 39: 1, 40: 1, 41: 0, 42: 1, 43: 3, 44: 3, 45: 3, 46: 1, 47: 1, 48: 0, 49: 3}
 
 # Building mapping for the geolabels
 def build_geolabel_lut(mapping_dict, ignore_index, extra_ignore_values=(255,)):
@@ -173,6 +178,7 @@ class WACVisGeomaps(NonGeoDataset):
         transforms= None,
         no_data_replace: float | None = 0,
         no_label_replace: float | None = -1,
+        geolabel_unit_mapping: Optional[Dict[int, int]] = None,
         **_,
     ) -> None:
         """Constructor
@@ -206,17 +212,39 @@ class WACVisGeomaps(NonGeoDataset):
         self.percentile_normalize = percentile_normalize
         self.transforms = transforms
 
+        if geolabel_unit_mapping:
+            self.geolabel_unit_mapping = geolabel_unit_mapping
+        else:
+            self.geolabel_unit_mapping =GEOLABEL_UNIT_MAPPING
+
         # Use the parquet that contains the WAC_VIS_TILE with a path to the filename
         df = pd.read_parquet(splits_path)
         self.imgs = [
             p.replace("vis/", "") for p in df[df["dataset"] == split]["WAC_VIS_TILE"]
         ]
 
+        # print(">>> sanity: mapping_dict[4] =", geolabel_unit_mapping.get(4))
+        # print(">>> sanity: mapping_dict[23] =", geolabel_unit_mapping.get(23))
+        # print(">>> sanity: mapping_dict[25] =", geolabel_unit_mapping.get(25))
+
         self.lut_cfg = build_geolabel_lut(
-            GEOLABEL_UNIT_MAPPING,
+            self.geolabel_unit_mapping,
             ignore_index=self.no_label_replace,   # -1
             extra_ignore_values=(255,)
         )
+        # print(">>> lut_cfg mode:", self.lut_cfg["mode"])
+
+        # if self.lut_cfg["mode"] == "offset":
+        #     lut = self.lut_cfg["lut"]; off = self.lut_cfg["offset"]
+        #     print(">>> LUT[4+off] =", lut[4 + off])     # should be 14
+        #     print(">>> LUT[23+off] =", lut[23 + off])   # should be 2
+        #     print(">>> LUT[25+off] =", lut[25 + off])   # should be 3
+        # elif self.lut_cfg["mode"] == "mask":
+        #     arr = self.lut_cfg["mapping_arr"]
+        #     print(">>> ARR[4] =", arr[4])               # should be 14
+        #     print(">>> ARR[23] =", arr[23])             # should be 2
+        #     print(">>> ARR[25] =", arr[25])             # should be 3
+
     def __len__(self) -> int:
         return len(self.imgs)
 
@@ -238,11 +266,15 @@ class WACVisGeomaps(NonGeoDataset):
         # print(label)
         # Remap to the smaller number of label categories
         label = label.astype(np.int32)
+        # print(f"{fname} labels before lut: {np.unique(label)}\n")
         label = apply_geolabel_lut(label, self.lut_cfg)
         label = torch.from_numpy(label).long()
+        # print(f"{fname} lalels after lut: {np.unique(label)}\n")
 
+        # print(f"pre-%norm image min {fname}: {image.min()} | max: {image.max()} | mean: {image.mean()} | std: {image.std()}\n")
         if self.percentile_normalize:
             image = percentile_norm(image)
+        # print(f"post-transform image min {fname}: {image.min()} | max: {image.max()} | mean: {image.mean()} | std: {image.std()}\n")
 
         sample = {"image": image, "mask": label}
 
@@ -301,41 +333,61 @@ class WACVisGeomaps(NonGeoDataset):
         Returns:
             a matplotlib Figure with the rendered sample
         """
+        ignore_index = self.no_label_replace
+        num_classes = self.num_classes
         num_images = 4 # legend, wac vis, labels, labels on wac_vis
         image = percentile_normalization(sample['image'].permute(1, 2, 0).numpy())
         label = sample['mask'].permute(1,2,0).numpy()
 
         prediction = sample.get("prediction", None)
         if prediction is not None:
-            num_images +=1
+            num_images += 1
+            pred_arr = prediction.cpu().numpy()
+        else:
+            pred_arr = None
+
+        # Map the ignore_index to an extra label at the end of the labels
+        vis_label = label.copy()
+        vis_label[vis_label == ignore_index] = num_classes
+
+        if pred_arr is not None:
+            vis_pred = pred_arr.copy()
+            vis_pred[vis_pred == ignore_index] = num_classes
+
+        # Create colormap with one extra for the ignore index
+        base_cmap = mpl.colormaps.get_cmap("jet").resampled(num_classes)
+        colors = list(base_cmap(range(num_classes)))  # range -> indices into LUT
+        colors.append((0, 0, 0, 1.0))
+        extended_cmap = mpl.colors.ListedColormap(colors)
+        norm = mpl.colors.Normalize(vmin=0, vmax=num_classes)
 
         fig, ax = plt.subplots(1, num_images, figsize=(12, 5), layout="compressed")
 
         ax[0].axis("off")
 
-        norm = mpl.colors.Normalize(vmin=0, vmax=self.num_classes - 1)
         ax[1].axis("off")
         ax[1].title.set_text("Image")
         ax[1].imshow(image)
 
         ax[2].axis("off")
         ax[2].title.set_text("Ground Truth Labels")
-        ax[2].imshow(label, cmap="jet", norm=norm)
+        ax[2].imshow(vis_label, cmap=extended_cmap, norm=norm)
 
         ax[3].axis("off")
         ax[3].title.set_text("GT Labels on Image")
         ax[3].imshow(image)
-        ax[3].imshow(label, cmap="jet", alpha=0.3, norm=norm)
+        ax[3].imshow(vis_label, cmap=extended_cmap, alpha=0.3, norm=norm)
 
-        if prediction is not None:
+        if pred_arr is not None:
             ax[4].axis("off")
             ax[4].title.set_text("Predicted Labels")
-            ax[4].imshow(prediction, cmap="jet", norm=norm)
+            ax[4].imshow(vis_pred, cmap=extended_cmap, norm=norm)
 
-        cmap = plt.get_cmap("jet")
-        legend_data = [[i, cmap(norm(i)), str(i)] for i in range(self.num_classes)]
-        handles = [Rectangle((0, 0), 1, 1, color=tuple(v for v in c)) for k, c, n in legend_data]
-        labels = [n for k, c, n in legend_data]
+        legend_data = [(i, colors[i], str(i)) for i in range(num_classes)]
+        legend_data.append((num_classes, colors[num_classes], "nan"))
+
+        handles = [Rectangle((0, 0), 1, 1, color=c) for _, c, _ in legend_data]
+        labels  = [n for _, _, n in legend_data]
         ax[0].legend(handles, labels, loc="center")
 
         if suptitle is not None:
