@@ -44,7 +44,11 @@ class WACVisRobbins(NonGeoDataset):
     all_band_names = ("415","566", "604", "643", "689")
     rgb_bands = ("415", "415", "415")
 
-    BAND_SETS = {"all": all_band_names, "rgb": rgb_bands}
+    CHANNELS = {"vis": ("415","566", "604", "643", "689"),
+                "aspect": ("ASPECT_SIN","ASPECT_COS"),
+                "slope": ("SLOPE",),
+                 "dtm": ("DTM",),
+                 }
 
     num_classes = 2 # crater class and non-crater class
     splits = {"train": "training", "val": "validation", "test": "testing"}
@@ -54,12 +58,15 @@ class WACVisRobbins(NonGeoDataset):
 
     def __init__(
         self,
-        wac_data_root: str, # /rtmp/hpatil/data/WAC_ELV_SLP_SIN_COS/vis
+        data_roots: dict, 
+        # aspect_data_root: str,
+        # slope_data_root: str,
+        # dtm_data_root: str,
         stats_path: str,
         splits_path: str,
         annotations_path: str,
         split: str = "train", 
-        bands: Sequence[str] = BAND_SETS["rgb"],
+        channels = CHANNELS,
         percentile_normalize: bool = False,
         transforms: v2.Compose | None = None,
         no_data_replace: float | None = 0,
@@ -84,14 +91,14 @@ class WACVisRobbins(NonGeoDataset):
         if split not in self.splits:
             msg = f"Incorrect split '{split}', please choose one of {self.splits}."
             raise ValueError(msg)
-        split_name = self.splits[split]
+        # split_name = self.splits[split]
         self.split = split
 
-        validate_bands(bands, self.all_band_names)
-        self.bands = bands
-        self.band_indices = np.asarray([self.all_band_names.index(b) for b in bands])
+        # validate_bands(bands, self.all_band_names)
+        self.channels = channels
+        # self.band_indices = np.asarray([self.all_band_names.index(b) for b in bands])
 
-        self.wac_data_root = wac_data_root
+        self.data_roots = data_roots
         self.no_data_replace = no_data_replace
         self.transforms = transforms
 
@@ -127,15 +134,21 @@ class WACVisRobbins(NonGeoDataset):
         Returns:
             data and label at that index
         """
+        # pdb.set_trace()
         img_id = int(self.ids[index])
         # HAD TO MAKE THIS CHANGE FOR CCC
         filename = self.coco.loadImgs([img_id])[0]['file_name'].replace("vis/","")
-        image = self._load_file(filename, nan_replace=self.no_data_replace)
-        image = torch.from_numpy(image.to_numpy()).float()
+        for i, channel in enumerate(self.channels):
+            if i==0:
+                stacked_images = self._load_h5(self.data_roots[channel], filename, self.channels[channel], nan_replace=self.no_data_replace)
+            else:
+                new_im = self._load_h5(self.data_roots[channel], filename, self.channels[channel], nan_replace=self.no_data_replace)
+                stacked_images = np.concatenate([stacked_images, new_im], axis=0)
+        stacked_images = torch.from_numpy(stacked_images).float()
 
         sample: dict[str, Any] = {
             # Image is (C, H, W)
-            "image": image,
+            "image": stacked_images,
             "label": self._load_target(img_id),
         }
 
@@ -153,8 +166,11 @@ class WACVisRobbins(NonGeoDataset):
         
         # # Percentile normalize to deal with data issues:
         if self.percentile_normalize:
-            img = normalize_percentile_tensor(sample['image']) # version 25
-            sample['image'] = img
+            # img = normalize_percentile_tensor(sample['image']) # version 25
+            # Percentile normalize across the channel dimension
+            # pdb.set_trace()
+            img = percentile_normalization(sample['image'].cpu().numpy(), axis=0, lower = 2, upper=98)
+            sample['image'] = torch.from_numpy(img).float()
 
         if self.transforms is not None:
             sample = self.transforms(sample)
@@ -164,7 +180,7 @@ class WACVisRobbins(NonGeoDataset):
         return sample
 
 
-    def _load_file(self, filename: str, nan_replace: int | float | None = None) -> xr.DataArray:
+    def _load_file(self, dataroot: str, filename: str, channels: tuple, nan_replace: int | float | None = None) -> xr.DataArray:
         """Load a single image.
 
         Modified from torchgeo.datasets.vhr10.py
@@ -176,10 +192,10 @@ class WACVisRobbins(NonGeoDataset):
             the image
         
         """
-        path = Path(self.wac_data_root)/filename
+        path = Path(dataroot)/filename
 
         with h5netcdf.File(path) as ds:
-            bands = [ds[b][()] for b in self.bands]
+            bands = [ds[b][()] for b in channels]
             arr = np.stack(bands)
             xp = ds['x'][()]
             yp = ds['y'][()]
@@ -193,6 +209,15 @@ class WACVisRobbins(NonGeoDataset):
         ds_base=ds_base.transpose('band', 'y', 'x')
 
         return ds_base
+    
+    def _load_h5(self, dataroot: str, filename: str, bands: Sequence[str], nan_replace):
+        """Load a stack of bands from HDF5."""
+        # pdb.set_trace()
+        with h5netcdf.File(f"{dataroot}/{filename}") as ds:
+            arr = np.stack([ds[b][()] for b in bands])
+            if nan_replace is not None:
+                arr = np.nan_to_num(arr, nan=nan_replace)
+        return arr
     
     def _load_target(self, img_id: int) -> dict[str, Any]:
         """Load the annotations for a single image.
@@ -242,7 +267,10 @@ class WACVisRobbins(NonGeoDataset):
         .. versionadded:: 0.4
         """
         assert show_feats in {'boxes', 'masks', 'both'}
-        image = percentile_normalization(sample['image'].permute(1, 2, 0).numpy())
+        # pdb.set_trace()
+        # Select first 3 bands (WAC VIS)
+        # TODO put in safety to only plot wac vis
+        image = percentile_normalization(sample['image'][:3,:,:].permute(1, 2, 0).numpy())
 
         if show_feats != 'boxes':
             skimage = lazy_import('skimage')

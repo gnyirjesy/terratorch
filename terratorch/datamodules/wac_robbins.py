@@ -182,7 +182,11 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
     all_band_names = ("415","566", "604", "643", "689")
     rgb_bands = ("415", "415", "415")
 
-    BAND_SETS = {"all": all_band_names, "rgb": rgb_bands}
+    CHANNELS = {"vis": ("415","566", "604", "643", "689"),
+                "aspect": ("ASPECT_SIN","ASPECT_COS"),
+                "slope": ("SLOPE",),
+                 "dtm": ("DTM",),
+                 }
 
     num_classes = 2 # crater class and non-crater class
     splits = {"train": "training", "val": "validation"}
@@ -192,13 +196,12 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
 
     def __init__(
         self,
-        # coco_data_root: str,
-        wac_data_root: str,
+        data_roots: dict,
         stats_path: str,
         splits_path: str,
         annotations_path: str,
         split: str = 'train',
-        bands: Sequence[str] = BAND_SETS["rgb"],
+        channels= CHANNELS,
         # transforms: v2.Compose | None = None,
         no_data_replace: float | None = 0,
         # use_metadata: bool = False,
@@ -222,9 +225,9 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
                         #  coco_data_root=coco_data_root,
                         splits_path= splits_path,
                         annotations_path= annotations_path, 
-                         wac_data_root=wac_data_root,
+                        data_roots=data_roots,
                          split=split,
-                         bands=bands,
+                         channels=channels,
                          percentile_normalize = percentile_normalize,
                         #  transforms=transforms,
                          no_data_replace=no_data_replace,
@@ -235,7 +238,7 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
                         #  use_metadata=use_metadata
                          **kwargs
         )
-
+        # pdb.set_trace()
         self.train_transform = partial(apply_transforms,transforms=get_transform(True, image_size, labels_tag=labels_output_tag), boxes_tag=boxes_output_tag, labels_tag=labels_output_tag, masks_tag=masks_output_tag)
         self.val_transform = partial(apply_transforms,transforms=get_transform(False, image_size, labels_tag=labels_output_tag), boxes_tag=boxes_output_tag, labels_tag=labels_output_tag, masks_tag=masks_output_tag)
         self.test_transform = partial(apply_transforms,transforms=get_transform(False, image_size, labels_tag= labels_output_tag), boxes_tag=boxes_output_tag, labels_tag=labels_output_tag, masks_tag=masks_output_tag)
@@ -243,29 +246,29 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
         with open(stats_path, 'r') as f:
             self.stats = yaml.safe_load(f)
         
-        self.bands = bands
+        self.channels = channels
         self.percentile_normalize = percentile_normalize
 
 
         if apply_norm_in_datamodule:
-            means=(self.stats[self.bands[0]]['mean'], 
-                  self.stats[self.bands[1]]['mean'],
-                  self.stats[self.bands[2]]['mean']
-                  )
-            stds=(self.stats[self.bands[0]]['std'], 
-                    self.stats[self.bands[1]]['std'],
-                    self.stats[self.bands[2]]['std']
-                    )
+            means = []
+            stds = []
+            for channel in self.channels:
+                means += self.stats[channel]['mean']
+                stds += self.stats[channel]['std']
             # Apply with the imagenet values - the data before this point should be scaled 0-1
             # self.aug = Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), max_pixel_value=1) # ImageNet defaults
             self.aug = Normalize(means=means, stds=stds, max_pixel_value=1)
         else:
-            self.aug = Normalize((0, 0, 0), (1, 1, 1), max_pixel_value=1)
+            self.aug = Normalize(
+                tuple(torch.zeros(sum(len(value) for value in self.channels.values()))),
+                tuple(torch.ones(sum(len(value) for value in self.channels.values()))),
+                max_pixel_value=1)
 
         # self.coco_data_root = coco_data_root
         self.splits_path = splits_path
         self.annotations_path = annotations_path
-        self.wac_data_root = wac_data_root
+        self.data_roots = data_roots
         self.stats_path = stats_path
         self.split = split
         self.batch_size = batch_size
@@ -286,10 +289,10 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
                 # coco_data_root=self.coco_data_root, 
                 splits_path = self.splits_path,
                 annotations_path = self.annotations_path,
-                wac_data_root=self.wac_data_root, 
+                data_roots=self.data_roots, 
                 stats_path=self.stats_path,
                 split= "train", 
-                bands= self.bands,
+                channels= self.channels,
                 percentile_normalize = self.percentile_normalize,
                 transforms=self.train_transform,
                 no_data_replace=self.no_data_replace,
@@ -300,10 +303,10 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
                 # coco_data_root=self.coco_data_root, 
                 splits_path = self.splits_path,
                 annotations_path = self.annotations_path,
-                wac_data_root=self.wac_data_root, 
+                data_roots=self.data_roots, 
                 stats_path=self.stats_path,
                 split="val", 
-                bands=self.bands,
+                channels= self.channels,
                 percentile_normalize = self.percentile_normalize,
                 transforms=self.val_transform,
                 no_data_replace=self.no_data_replace,
@@ -314,10 +317,10 @@ class WACVisRobbinsDataModule(NonGeoDataModule):
                 # coco_data_root=self.coco_data_root, 
                 splits_path = self.splits_path,
                 annotations_path = self.annotations_path,
-                wac_data_root=self.wac_data_root, 
+                data_roots=self.data_roots,
                 stats_path=self.stats_path,
                 split="test", 
-                bands=self.bands,
+                channels= self.channels,
                 percentile_normalize = self.percentile_normalize,
                 transforms=self.test_transform,
                 no_data_replace=self.no_data_replace,
