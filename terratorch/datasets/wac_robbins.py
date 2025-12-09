@@ -166,11 +166,11 @@ class WACVisRobbins(NonGeoDataset):
         
         # # Percentile normalize to deal with data issues:
         if self.percentile_normalize:
-            # img = normalize_percentile_tensor(sample['image']) # version 25
+            img = normalize_percentile_tensor(sample['image']) # version 25
             # Percentile normalize across the channel dimension
             # pdb.set_trace()
-            img = percentile_normalization(sample['image'].cpu().numpy(), axis=0, lower = 2, upper=98)
-            sample['image'] = torch.from_numpy(img).float()
+            # img = torch.from_numpy(percentile_normalization(sample['image'].cpu().numpy(), axis=0, lower = 2, upper=98)).float()
+            sample['image'] = img
 
         if self.transforms is not None:
             sample = self.transforms(sample)
