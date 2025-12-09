@@ -633,7 +633,7 @@ class LightningInferenceModel:
                 else:
                     weights_[k] = v
 
-            self.model.model.load_state_dict(weights_)
+            self.model.model.load_state_dict(weights_, strict=False)
 
         # dont write
         non_writing_callbacks = []

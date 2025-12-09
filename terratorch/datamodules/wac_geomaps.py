@@ -117,27 +117,39 @@ class Normalize(Callable):
         batch["image"] = (image - means) / stds
         return batch
     
-class SigNumLog(Callable):
-    def __init__(self, mins, maxs, sl_scale_factor: float = 1.0):
+class SigNumLogMinMaxScaler(Callable):
+    def __init__(self,
+        min_values: Sequence[float],
+        max_values: Sequence[float],
+        new_min: Sequence[float] = (-1.0,),
+        new_max: Sequence[float] = (1.0,),
+        sl_scale_factor: float = 1.0,
+    ):
         super().__init__()
-        self.mins = mins
-        self.maxs = maxs
-        self.sl_scale_factor = sl_scale_factor
+        self.mins = min_values
+        self.maxs = max_values
+        self.new_min = new_min
+        self.new_max = new_max
+        self._sl_scale_factor = sl_scale_factor
 
     def __call__(self, batch):
         # batch['image']=torch.stack(tuple(batch["image"]))
         image = batch["image"]
         if len(image.shape) == 5:
-            mins = torch.tensor(self.mins, device=image.device).view(1, -1, 1, 1, 1)
-            maxs = torch.tensor(self.maxs, device=image.device).view(1, -1, 1, 1, 1)
+            mins = torch.tensor(self.mins, device=image.device, dtype=torch.int32).view(1, -1, 1, 1, 1)
+            maxs = torch.tensor(self.maxs, device=image.device, dtype=torch.int32).view(1, -1, 1, 1, 1)
+            new_min = torch.tensor(self.new_min, device=image.device, dtype=torch.int32).view(1, -1, 1, 1, 1)
+            new_max = torch.tensor(self.new_max, device=image.device, dtype=torch.int32).view(1, -1, 1, 1, 1)
         elif len(image.shape) == 4:
-            mins = torch.tensor(self.mins, device=image.device).view(1, -1, 1, 1)
-            maxs = torch.tensor(self.maxs, device=image.device).view(1, -1, 1, 1)
+            mins = torch.tensor(self.mins, device=image.device, dtype=torch.int32).view(1, -1, 1, 1)
+            maxs = torch.tensor(self.maxs, device=image.device, dtype=torch.int32).view(1, -1, 1, 1)
+            new_min = torch.tensor(self.new_min, device=image.device, dtype=torch.int32).view(1, -1, 1, 1)
+            new_max = torch.tensor(self.new_max, device=image.device, dtype=torch.int32).view(1, -1, 1, 1)
         else:
             msg = f"Expected batch to have 5 or 4 dimensions, but got {len(image.shape)}"
             raise Exception(msg)
-        y = (image - mins) / (maxs - mins)
-        batch["image"] = torch.sign(y)*torch.log1p(torch.abs(y*self.sl_scale_factor))
+        y = np.sign(image) * np.log1p(np.abs(self._sl_scale_factor*image))
+        batch["image"] = ((y - mins)/(maxs - mins)) * (new_max - new_min) + new_min
         return batch
 
 class WACVisGeomapsDataModule(NonGeoDataModule):
@@ -163,7 +175,7 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
         batch_size: int = 4,
         num_workers: int = 0,
         # image_size=300,
-        apply_norm_in_datamodule=True, # objectdetection tasks assume normalization in datamodule
+        apply_norm_in_datamodule=True,
         percentile_normalize = False, # Normalize in dataset percentile based
         geolabel_unit_mapping: Optional[Dict[int, int]] = None,
         **kwargs):
@@ -192,6 +204,7 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         
+        # Torchgeo applies the aug to each batch
         if apply_norm_in_datamodule:
             means = tuple(self.stats[b]['mean'] for b in self.bands)
             stds  = tuple(self.stats[b]['std']  for b in self.bands)
@@ -243,6 +256,20 @@ class WACVisGeomapsDataModule(NonGeoDataModule):
             )    
         if stage in ["test"]:
             self.test_dataset = WACVisGeomaps(
+                split="test", 
+                wac_data_root=self.wac_data_root, 
+                labels_root=self.labels_root,
+                splits_path = self.splits_path,
+                num_classes = self.num_classes,
+                bands= self.bands,
+                percentile_normalize = self.percentile_normalize,
+                transforms=self.test_transform,
+                no_data_replace=self.no_data_replace,
+                no_label_replace=self.no_label_replace,
+                geolabel_unit_mapping=self.geolabel_unit_mapping
+            )  
+        if stage in ["predict"]:
+            self.predict_dataset = WACVisGeomaps(
                 split="test", 
                 wac_data_root=self.wac_data_root, 
                 labels_root=self.labels_root,

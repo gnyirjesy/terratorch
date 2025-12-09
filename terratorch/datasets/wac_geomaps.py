@@ -342,7 +342,9 @@ class WACVisGeomaps(NonGeoDataset):
         prediction = sample.get("prediction", None)
         if prediction is not None:
             num_images += 1
-            pred_arr = prediction.cpu().numpy()
+            pred_arr = prediction
+            if hasattr(pred_arr, "cpu"):  # torch tensor
+                pred_arr = pred_arr.cpu().numpy()
         else:
             pred_arr = None
 
