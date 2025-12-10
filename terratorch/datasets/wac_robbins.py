@@ -28,11 +28,28 @@ def load_json(path: str):
     with open(path, "r") as f:
         return json.load(f)
 
-def normalize_percentile_tensor(img):
-    # Output is 0-1 range tensor
-    x = img.permute(1,2,0).cpu().numpy()
-    x = percentile_normalization(x)
-    return torch.from_numpy(x).permute(2,0,1).float()
+# def normalize_percentile_tensor(img):
+#     # Output is 0-1 range tensor
+#     x = img.permute(1,2,0).cpu().numpy()
+#     x = percentile_normalization(x)
+#     return torch.from_numpy(x).permute(2,0,1).float()
+
+def normalize_percentile_tensor(img: torch.Tensor, lower=2, upper=98):
+    # img: (C, H, W)
+    assert img.ndim == 3, "Expected (C,H,W)"
+
+    # Compute percentiles per-channel
+    flat = img.view(img.shape[0], -1)  # (C, H*W)
+    lo = torch.quantile(flat, lower / 100.0, dim=1, keepdim=True)
+    hi = torch.quantile(flat, upper / 100.0, dim=1, keepdim=True)
+
+    # Reshape for broadcasting
+    lo = lo.view(-1, 1, 1)
+    hi = hi.view(-1, 1, 1)
+
+    # Normalize
+    out = (img - lo) / (hi - lo + 1e-6)
+    return out.clamp(0, 1)
 
 def normalize_image(img):
     x = img.cpu().numpy()
@@ -99,6 +116,7 @@ class WACVisRobbins(NonGeoDataset):
         # self.band_indices = np.asarray([self.all_band_names.index(b) for b in bands])
 
         self.data_roots = data_roots
+        print(f"self.data_roots: {self.data_roots}")
         self.no_data_replace = no_data_replace
         self.transforms = transforms
 
@@ -163,7 +181,7 @@ class WACVisRobbins(NonGeoDataset):
             sample[self.labels_output_tag] = sample['label']['labels']
             if self.labels_output_tag != 'label':
                 del sample['label']
-        
+        # pdb.set_trace()
         # # Percentile normalize to deal with data issues:
         if self.percentile_normalize:
             img = normalize_percentile_tensor(sample['image']) # version 25
